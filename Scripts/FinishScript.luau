@@ -8,12 +8,11 @@ for _, objek in pairs(game.Workspace:GetDescendants()) do
 	end
 end
 
--- 2. Fungsi untuk membuat pengumuman UI yang bisa menumpuk (Stacking) ke semua pemain
+-- 2. Fungsi untuk membuat pengumuman UI Stacking
 local function buatPengumuman(namaPemain)
 	for _, p in pairs(game.Players:GetPlayers()) do
 		local gui = p:FindFirstChild("PlayerGui")
 		if gui then
-			-- Bikin wadah pengumuman kalau belum ada
 			local screenGui = gui:FindFirstChild("PengumumanFinish")
 			if not screenGui then
 				screenGui = Instance.new("ScreenGui")
@@ -23,11 +22,10 @@ local function buatPengumuman(namaPemain)
 				local frame = Instance.new("Frame")
 				frame.Name = "Container"
 				frame.Size = UDim2.new(1, 0, 0.4, 0)
-				frame.Position = UDim2.new(0, 0, 0.1, 0) -- Posisinya di atas layar
+				frame.Position = UDim2.new(0, 0, 0.1, 0)
 				frame.BackgroundTransparency = 1
 				frame.Parent = screenGui
 
-				-- UIListLayout ini yang bikin teks otomatis numpuk rapi ke bawah
 				local layout = Instance.new("UIListLayout")
 				layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 				layout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -35,7 +33,6 @@ local function buatPengumuman(namaPemain)
 				layout.Parent = frame
 			end
 
-			-- Bikin Teks Pengumuman Baru
 			local label = Instance.new("TextLabel")
 			label.Size = UDim2.new(0, 550, 0, 35)
 			label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -46,7 +43,6 @@ local function buatPengumuman(namaPemain)
 			label.Text = "?? LUAR BIASA! [" .. namaPemain .. "] MENYELESAIKAN BLOCKY SPEEDRUN! ??"
 			label.Parent = screenGui.Container
 
-			-- Hapus teks setelah 4 detik (Fade-out logic sederhana)
 			task.delay(4, function()
 				if label then label:Destroy() end
 			end)
@@ -54,66 +50,124 @@ local function buatPengumuman(namaPemain)
 	end
 end
 
--- 3. Trigger Finish Line
-finishLine.Touched:Connect(function(hit)
-	local character = hit.Parent
-	local player = game.Players:GetPlayerFromCharacter(character)
+-- 3. Fungsi Inti: Proses Kemenangan (Bisa dipakai barengan)
+local function prosesMenang(p)
+	if p:GetAttribute("IsFinishing") then return false end
+	p:SetAttribute("IsFinishing", true)
 
-	if player and not player:GetAttribute("IsFinishing") then
+	local currentProgress = p:GetAttribute("CurrentCP") or 0
 
-		-- === CEK ANTI-SKIP ===
-		local currentProgress = player:GetAttribute("CurrentCP") or 0
-
-		-- Kalau CP yang dilewati kurang dari total CP di map
-		if currentProgress < totalCP then
-			player:SetAttribute("IsFinishing", true)
-
-			-- Kasih peringatan merah besar di layar dia (Pakai Message biar kaget)
+	-- JIKA GAGAL (SKIP CP)
+	if currentProgress < totalCP then
+		-- Peringatan dimunculkan tanpa menghentikan script utama
+		task.spawn(function()
 			local warning = Instance.new("Message")
-			warning.Text = "? KAU BELUM MENYELESAIKAN SEMUA CHECKPOINT! (Sisa: " .. (totalCP - currentProgress) .. " CP) ?"
-			warning.Parent = player:FindFirstChild("PlayerGui")
-
+			warning.Text = "? [".. p.Name .. "] BELUM MENYELESAIKAN SEMUA CHECKPOINT! (Sisa: " .. (totalCP - currentProgress) .. " CP) ?"
+			warning.Parent = p:FindFirstChild("PlayerGui")
 			task.wait(3)
-			warning:Destroy()
-			player:SetAttribute("IsFinishing", false)
-			return -- Hentikan script di sini, dia tidak boleh finish!
-		end
+			if warning then warning:Destroy() end
+			p:SetAttribute("IsFinishing", false)
+		end)
+		return false
+	end
 
-		-- === PROSES FINISH ASLI JIKA LULUS ===
-		player:SetAttribute("IsFinishing", true)
+	-- JIKA LULUS
+	p.leaderstats.Poin.Value = p.leaderstats.Poin.Value + 100
+	p.leaderstats.Menang.Value = p.leaderstats.Menang.Value + 1
+	p.leaderstats.CP.Value = 0
 
-		-- 1. Berikan bonus poin
-		player.leaderstats.Poin.Value = player.leaderstats.Poin.Value + 100
-		player.leaderstats.Menang.Value = player.leaderstats.Menang.Value + 1
-		player.leaderstats.CP.Value = 0
-		
-		-- 2. Pesan Kemenangan (Panggil fungsi UI Stacking tadi)
-		buatPengumuman(player.Name)
+	buatPengumuman(p.Name)
 
-		-- 3. Reset memori checkpoint pemain ini biar bisa main lagi
-		player:SetAttribute("CurrentCP", 0) 
-		local cpData = player:FindFirstChild("CheckpointAktif")
-		if cpData then cpData:Destroy() end
+	p:SetAttribute("CurrentCP", 0) 
+	local cpData = p:FindFirstChild("CheckpointAktif")
+	if cpData then cpData:Destroy() end
 
-		-- 4. RESET SEMUA CHECKPOINT DI MAP
-		if not game.Workspace:GetAttribute("IsResetting") then
-			game.Workspace:SetAttribute("IsResetting", true)
-			for _, objek in pairs(game.Workspace:GetDescendants()) do
-				if objek.Name == "KarpetCP" and objek:IsA("BasePart") then
-					objek.BrickColor = BrickColor.new("Bright green")
+	return true
+end
+
+-- 4. Trigger Finish Line
+finishLine.Touched:Connect(function(hit)
+	local charPenginjak = hit.Parent
+	local playerPenginjak = game.Players:GetPlayerFromCharacter(charPenginjak)
+
+	if playerPenginjak and not playerPenginjak:GetAttribute("IsFinishing") then
+
+		-- A. Cari tahu apakah Penginjak sedang menggendong seseorang
+		local playerPenumpang = nil
+		local charPenumpang = nil
+		local weldGendong = nil
+
+		local hrpPenginjak = charPenginjak:FindFirstChild("HumanoidRootPart")
+		if hrpPenginjak then
+			for _, pLain in pairs(game.Players:GetPlayers()) do
+				if pLain ~= playerPenginjak and pLain.Character then
+					local hrpLain = pLain.Character:FindFirstChild("HumanoidRootPart")
+					if hrpLain then
+						local weld = hrpLain:FindFirstChild("CarryWeld")
+						-- Kalau ada yang nempel ke Penginjak, berarti dia penumpangnya
+						if weld and weld.Part0 == hrpPenginjak then
+							playerPenumpang = pLain
+							charPenumpang = pLain.Character
+							weldGendong = weld
+						end
+					end
 				end
 			end
-			task.wait(2)
-			game.Workspace:SetAttribute("IsResetting", false)
 		end
 
-		-- 5. Pindahkan karakter kembali ke Start
-		task.wait(1)
-		local titikAwal = game.Workspace:FindFirstChild("SpawnLocation")
-		if titikAwal then
-			character:PivotTo(titikAwal.CFrame + Vector3.new(0, 5, 0))
+		-- B. Proses Keduanya (Anti-Skip tetap berlaku untuk masing-masing)
+		local lulusPenginjak = prosesMenang(playerPenginjak)
+		local lulusPenumpang = false
+		if playerPenumpang then
+			lulusPenumpang = prosesMenang(playerPenumpang)
 		end
 
-		player:SetAttribute("IsFinishing", false)
+		-- C. Eksekusi Dunia & Teleport (Hanya kalau ada yang lulus)
+		task.spawn(function()
+			-- Reset Karpet CP kalau ada yang berhasil tamat
+			if (lulusPenginjak or lulusPenumpang) and not game.Workspace:GetAttribute("IsResetting") then
+				game.Workspace:SetAttribute("IsResetting", true)
+				for _, objek in pairs(game.Workspace:GetDescendants()) do
+					if objek.Name == "KarpetCP" and objek:IsA("BasePart") then
+						objek.BrickColor = BrickColor.new("Bright green")
+					end
+				end
+				task.delay(2, function()
+					game.Workspace:SetAttribute("IsResetting", false)
+				end)
+			end
+
+			task.wait(1) -- Jeda dramatis sebelum teleport
+
+			-- MELEPAS GENDONGAN SECARA PAKSA SEBELUM TELEPORT
+			if charPenumpang and weldGendong then
+				weldGendong:Destroy()
+				for _, part in pairs(charPenumpang:GetChildren()) do
+					if part:IsA("BasePart") then part.Massless = false end
+				end
+				charPenumpang.Parent = workspace
+				charPenumpang.Humanoid.PlatformStand = false
+
+				-- Reset tulisan prompt biar rapi lagi
+				local att = charPenumpang.HumanoidRootPart:FindFirstChild("CarryAttachment")
+				if att and att:FindFirstChild("PromptGendong") then
+					att.PromptGendong.ActionText = "Gendong"
+				end
+			end
+
+			-- Pindahkan kembali ke Spawn
+			local titikAwal = game.Workspace:FindFirstChild("SpawnLocation")
+			if titikAwal then
+				if lulusPenginjak then
+					charPenginjak:PivotTo(titikAwal.CFrame + Vector3.new(0, 5, 0))
+					playerPenginjak:SetAttribute("IsFinishing", false)
+				end
+				if lulusPenumpang then
+					-- Penumpang di-teleport agak menyamping biar nggak numpuk
+					charPenumpang:PivotTo(titikAwal.CFrame + Vector3.new(0, 5, 4))
+					playerPenumpang:SetAttribute("IsFinishing", false)
+				end
+			end
+		end)
 	end
 end)
